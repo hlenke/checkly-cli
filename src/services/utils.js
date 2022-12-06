@@ -77,7 +77,7 @@ function findChecklyDir () {
 }
 
 function getChecklyConfigPath () {
-  if (!hasChecklyConfigFile) {
+  if (!hasChecklyConfigFile()) {
     throw new Error('Missing config file')
   }
 
