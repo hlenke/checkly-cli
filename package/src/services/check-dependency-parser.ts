@@ -4,9 +4,18 @@ import * as acorn from 'acorn'
 import * as walk from 'acorn-walk'
 import { TSESTree } from '@typescript-eslint/typescript-estree'
 
+enum SupportedExtension {
+  JS = '.js',
+  TS = '.ts'
+}
+
 type UnsupportedNpmDependencies = {
   file: string;
   unsupportedDependencies: string[];
+}
+
+type ParsedMetadata = path.ParsedPath & {
+  filename: string
 }
 
 type ParseError = {
@@ -61,14 +70,11 @@ const supportedBuiltinModules = [
   'timers', 'tls', 'url', 'util', 'zlib',
 ]
 
-function parseExtension (entrypoint: string) {
-  if (entrypoint.endsWith('.js')) {
-    return '.js'
-  } else if (entrypoint.endsWith('.ts')) {
-    return '.ts'
-  } else {
-    throw new Error(`Unsupported file extension for ${entrypoint}`)
+function validateExtension (data: path.ParsedPath) {
+  if (data.ext !== SupportedExtension.JS && data.ext !== SupportedExtension.TS) {
+    throw new Error(`Unsupported file extension for ${data}`)
   }
+  return data.ext
 }
 
 function getTsParser (): any {
@@ -91,9 +97,18 @@ export class Parser {
     this.supportedModules = new Set([...supportedBuiltinModules, ...supportedNpmModules])
   }
 
-  parseDependencies (entrypoint: string): string[] {
-    const extension = parseExtension(entrypoint)
+  static buildFilePath (parsedData: path.ParsedPath) {
+    return path.join(parsedData.dir, parsedData.name)
+  }
 
+  static buildAbsolutePath (parsedData: path.ParsedPath) {
+    return path.join(parsedData.dir, parsedData.base)
+  }
+
+  parseDependencies (entrypoint: string): string[] {
+    const parsedPathData = path.parse(entrypoint)
+    const preferedExtension = validateExtension(parsedPathData)
+    const parsedPath = Parser.buildFilePath(parsedPathData)
     /*
   * The importing of files forms a directed graph.
   * Vertices are source files and edges are from importing other files.
@@ -103,39 +118,49 @@ export class Parser {
     const missingFiles: string[] = []
     const unsupportedNpmDependencies: UnsupportedNpmDependencies[] = []
     const parseErrors: ParseError[] = []
-    const dependencies = new Set<string>()
-    dependencies.add(entrypoint)
-    const bfsQueue: string[] = [entrypoint]
+    const dependencies = new Map<string, path.ParsedPath>()
+    dependencies.set(Parser.buildFilePath(parsedPathData), parsedPathData)
+    const bfsQueue: path.ParsedPath[] = [parsedPathData]
     while (bfsQueue.length > 0) {
     // Since we just checked the length, shift() will never return undefined.
     // We can add a not-null assertion operator (!).
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      const currentPath = bfsQueue.shift()!
+      const currentParsedData = bfsQueue.shift()!
+      const currentPath = Parser.buildFilePath(currentParsedData)
+      const currentAbsolutePath = Parser.buildAbsolutePath(currentParsedData)
       try {
-        const { localDependencies, npmDependencies } = Parser.parseDependenciesForFile(currentPath)
+        const { localDependencies, npmDependencies } = Parser.parseDependenciesForFile(currentParsedData)
         const unsupportedDependencies = npmDependencies.filter((dep) => !this.supportedModules.has(dep))
         if (unsupportedDependencies.length) {
-          unsupportedNpmDependencies.push({ file: currentPath, unsupportedDependencies })
+          unsupportedNpmDependencies.push({ file: currentAbsolutePath, unsupportedDependencies })
         }
-        const localDependenciesResolvedPaths = localDependencies.map((localDependency: string) => {
+        // eslint-disable-next-line max-len
+        const localDependenciesResolvedPaths = localDependencies.reduce((arr: { [s: string]: path.ParsedPath }, localDependency: string) => {
         // Convert a relative path to an absolute path.
           const resolvedPath = path.join(path.dirname(currentPath), localDependency)
+
+          const parsedData = path.parse(resolvedPath)
           // The import call may not have the .js / .ts extension, so we add it here.
           // We assume that the other file is also a JS or typescript file based on the entrypoint file type.
           // At some point, though, it may make sense to add support for mixing JS and typescript.
-          return Parser.addExtension(extension, resolvedPath)
-        })
-        localDependenciesResolvedPaths.forEach((path: string) => {
+          if (!parsedData.ext) {
+            parsedData.ext = preferedExtension
+            parsedData.base = `${parsedData.base}${parsedData.ext}`
+          }
+          arr[Parser.buildFilePath(parsedData)] = parsedData
+          return arr
+        }, {})
+        Object.entries(localDependenciesResolvedPaths).forEach(([path, parseData]) => {
           if (!dependencies.has(path)) {
-            dependencies.add(path)
-            bfsQueue.push(path)
+            dependencies.set(path, parseData)
+            bfsQueue.push(parseData)
           }
         })
       } catch (err: any) {
         if (err.code === 'ENOENT') {
-          missingFiles.push(currentPath)
+          missingFiles.push(currentAbsolutePath)
         } else {
-          parseErrors.push({ file: currentPath, error: err.message })
+          parseErrors.push({ file: currentAbsolutePath, error: err.message })
         }
       }
     }
@@ -144,8 +169,10 @@ export class Parser {
       throw new DependencyParseError(entrypoint, missingFiles, unsupportedNpmDependencies, parseErrors)
     }
 
-    dependencies.delete(entrypoint)
-    return Array.from(dependencies)
+    dependencies.delete(parsedPath)
+    return Array.from(dependencies, ([path, parsedData]) => {
+      return Parser.buildAbsolutePath(parsedData)
+    })
   }
 
   static addExtension (extension: string, filePath: string) {
@@ -156,10 +183,29 @@ export class Parser {
     }
   }
 
-  static parseDependenciesForFile (filePath: string): { localDependencies: string[], npmDependencies: string[] } {
+  static readFile (data: path.ParsedPath) {
+    if (data.ext === SupportedExtension.TS) {
+      for (const ext of [SupportedExtension.TS, SupportedExtension.JS]) {
+        try {
+          const d = { ...data, ext }
+          const contents = fs.readFileSync(Parser.buildAbsolutePath(d), { encoding: 'utf8' })
+          return { data: d, contents }
+        } catch (e) {}
+      }
+      throw new Error('Error')
+    } else {
+      const contents = fs.readFileSync(Parser.buildAbsolutePath(data), { encoding: 'utf8' })
+      return { data, contents }
+    }
+  }
+
+  static parseDependenciesForFile (parsedData: path.ParsedPath) {
     const localDependencies = new Set<string>()
     const npmDependencies = new Set<string>()
-    const contents = fs.readFileSync(filePath, { encoding: 'utf8' })
+
+    const { data, contents } = Parser.readFile(parsedData)
+
+    const filePath = Parser.buildAbsolutePath(data)
 
     if (filePath.endsWith('.js')) {
       const ast = acorn.parse(contents, {
