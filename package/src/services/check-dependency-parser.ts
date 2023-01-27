@@ -187,7 +187,7 @@ export class Parser {
     if (data.ext === SupportedExtension.TS) {
       for (const ext of [SupportedExtension.TS, SupportedExtension.JS]) {
         try {
-          const d = { ...data, ext }
+          const d = { ...data, ext, base: `${data.name}${ext}` }
           const contents = fs.readFileSync(Parser.buildAbsolutePath(d), { encoding: 'utf8' })
           return { data: d, contents }
         } catch (e) {}

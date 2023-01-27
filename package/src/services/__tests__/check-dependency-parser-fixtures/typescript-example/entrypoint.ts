@@ -1,6 +1,7 @@
 import { add } from './dep1'
 import { subtract } from './dep2'
 import * as axios from 'axios'
+import { random } from './import'
 
 export function doMath (num: number): number {
   return add(num, subtract(10, 7))
