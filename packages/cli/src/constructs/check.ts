@@ -1,4 +1,5 @@
 import { Ref } from './ref'
+import { Frequency } from './frequency'
 import { Construct } from './construct'
 import { AlertChannel } from './alert-channel'
 import { EnvironmentVariable } from './environment-variable'
@@ -47,7 +48,7 @@ export interface CheckProps {
   /**
    * How often the check should run in minutes.
    */
-  frequency?: number
+  frequency?: number | Frequency
   environmentVariables?: Array<EnvironmentVariable>
   /**
    * The id of the check group this check is part of.
@@ -71,6 +72,7 @@ export abstract class Check extends Construct {
   privateLocations?: Array<string>
   tags?: Array<string>
   frequency?: number
+  frequencyOffset?: number
   environmentVariables?: Array<EnvironmentVariable>
   groupId?: Ref
   alertChannels?: Array<AlertChannel>
@@ -90,7 +92,12 @@ export abstract class Check extends Construct {
     this.locations = props.locations
     this.privateLocations = props.privateLocations
     this.tags = props.tags
-    this.frequency = props.frequency
+    if (props.frequency instanceof Frequency) {
+      this.frequency = props.frequency.frequency
+      this.frequencyOffset = props.frequency.frequencyOffset
+    } else {
+      this.frequency = props.frequency
+    }
     this.runtimeId = props.runtimeId
     this.environmentVariables = props.environmentVariables ?? []
     // Alert channel subscriptions will be synthesized separately in the Project construct.
