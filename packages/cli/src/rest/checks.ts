@@ -10,4 +10,12 @@ export default class Checks {
     const type = check.checkType.toLowerCase()
     return this.api.post(`/next/checks/run/${type}`, check)
   }
+
+  runAll (checks: any) {
+    const checksPayload = checks.map((check: any) => ({
+      type: check.checkType,
+      payload: check,
+    }))
+    return this.api.post('/next/test-sessions/run', { checks: checksPayload })
+  }
 }

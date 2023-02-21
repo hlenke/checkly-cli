@@ -82,12 +82,14 @@ export default class CheckRunner extends EventEmitter {
 
   private async scheduleAllChecks (checkRunSuiteId: string): Promise<void> {
     const checkEntries = Array.from(this.checks.entries())
-    await Promise.all(checkEntries.map(
+    const checkRuns = checkEntries.map(
       ([checkRunId, check]) => this.scheduleCheck(checkRunSuiteId, checkRunId, check),
-    ))
+    )
+
+    await checksApi.runAll(checkRuns)
   }
 
-  private async scheduleCheck (checkRunSuiteId: string, checkRunId: string, check: Check): Promise<void> {
+  private scheduleCheck (checkRunSuiteId: string, checkRunId: string, check: Check): any {
     const checkRun: any = {
       ...check.synthesize(),
       runLocation: this.location,
@@ -101,7 +103,6 @@ export default class CheckRunner extends EventEmitter {
       delete checkRun.groupId
     }
     try {
-      await checksApi.run(checkRun)
       this.timeouts.set(checkRunId, setTimeout(() => {
         this.timeouts.delete(checkRunId)
         this.emit(Events.CHECK_FAILED, check, `Reached timeout of ${this.timeout} seconds waiting for check result.`)
@@ -112,6 +113,7 @@ export default class CheckRunner extends EventEmitter {
         new Error(`Failed to run a check. ${err.response ? err.response.data?.message : err.message}`))
       this.emit(Events.CHECK_FINISHED, check)
     }
+    return checkRun
   }
 
   private async configureResultListener (checkRunSuiteId: string, socketClient: AsyncMqttClient): Promise<void> {
