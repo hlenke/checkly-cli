@@ -9,14 +9,14 @@ export default class ListReporter extends AbstractListReporter {
     this._printSummary({ skipCheckCount: true })
   }
 
-  onBegin () {
+  onBegin (sessionId: string) {
     console.log(`\nRunning ${this.numChecks} checks in ${this._runLocationString()}.\n`)
-    this._printSummary()
+    this._printSummary({ sessionId })
   }
 
-  onEnd () {
+  onEnd (sessionId: string) {
     this._clearSummary()
-    this._printSummary()
+    this._printSummary({ sessionId })
   }
 
   onCheckEnd (checkResult: any) {

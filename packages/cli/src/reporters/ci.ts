@@ -9,14 +9,14 @@ export default class CiReporter extends AbstractListReporter {
     this._printSummary({ skipCheckCount: true })
   }
 
-  onBegin () {
+  onBegin (sessionId: string) {
     console.log(`\nRunning ${this.numChecks} checks in ${this._runLocationString()}:\n`)
-    this._printSummary({ skipCheckCount: true })
+    this._printSummary({ skipCheckCount: true, sessionId })
   }
 
-  onEnd () {
+  onEnd (sessionId: string) {
     console.log('Finished running all checks:\n')
-    this._printSummary()
+    this._printSummary({ sessionId })
   }
 
   onCheckEnd (checkResult: any) {

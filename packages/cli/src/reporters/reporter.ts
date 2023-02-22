@@ -1,5 +1,5 @@
 export interface Reporter {
-  onBegin(): void;
-  onEnd(): void;
+  onBegin(sessionId: string): void;
+  onEnd(sessionId: string): void;
   onCheckEnd(checkResult: any): void;
 }

@@ -34,9 +34,9 @@ export default abstract class AbstractListReporter implements Reporter {
     })
   }
 
-  abstract onBegin(): void
+  abstract onBegin(sessionId: string): void
 
-  abstract onEnd(): void
+  abstract onEnd(sessionId: string): void
 
   onCheckEnd (checkResult: any) {
     const checkStatus = this.checkFilesMap.get(checkResult.sourceFile)!.get(checkResult.logicalId)!
@@ -54,9 +54,13 @@ export default abstract class AbstractListReporter implements Reporter {
     console.log(this._clearString)
   }
 
-  _printSummary (opts: { skipCheckCount?: boolean} = {}) {
+  _printSummary (opts: { skipCheckCount?: boolean, sessionId?: string } = {}) {
     const counts = { numFailed: 0, numPassed: 0, numPending: 0 }
     const status = []
+    if (opts.sessionId) {
+      status.push(`Test session can be reached at https://app.checklyhq.com/test-sessions/${opts.sessionId}`)
+      status.push('')
+    }
     for (const [sourceFile, checkMap] of this.checkFilesMap.entries()) {
       status.push(sourceFile)
       for (const [_, { titleString, result }] of checkMap.entries()) {

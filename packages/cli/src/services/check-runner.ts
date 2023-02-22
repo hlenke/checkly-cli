@@ -65,7 +65,6 @@ export default class CheckRunner extends EventEmitter {
   }
 
   async run () {
-    this.emit(Events.RUN_STARTED)
     const socketClient = await SocketClient.connect()
 
     const checkRunSuiteId = uuid.v4()
@@ -73,11 +72,12 @@ export default class CheckRunner extends EventEmitter {
     await this.configureResultListener(checkRunSuiteId, socketClient)
     const allChecksFinished = this.allChecksFinished()
 
-    await this.scheduleAllChecks(checkRunSuiteId)
+    const sessionId = await this.scheduleAllChecks(checkRunSuiteId)
+    this.emit(Events.RUN_STARTED, sessionId)
 
     await allChecksFinished
     await socketClient.end()
-    this.emit(Events.RUN_FINISHED)
+    this.emit(Events.RUN_FINISHED, sessionId)
   }
 
   private async scheduleAllChecks (checkRunSuiteId: string): Promise<void> {
@@ -86,7 +86,8 @@ export default class CheckRunner extends EventEmitter {
       ([checkRunId, check]) => this.scheduleCheck(checkRunSuiteId, checkRunId, check),
     )
 
-    await checksApi.runAll(checkRuns)
+    const { data } = await checksApi.runAll(checkRuns)
+    return data
   }
 
   private scheduleCheck (checkRunSuiteId: string, checkRunId: string, check: Check): any {
