@@ -8,11 +8,12 @@ import Assets from './assets'
 import Runtimes from './runtimes'
 import PrivateLocations from './private-locations'
 import Locations from './locations'
+import TestSessions from './test-sessions'
 
 export function getDefaults () {
   const environments = {
     production: {
-      apiUrl: 'https://api.checklyhq.com',
+      apiUrl: 'http://localhost:3000',
     },
 
     development: {
@@ -90,3 +91,4 @@ export const assets = new Assets(api)
 export const runtimes = new Runtimes(api)
 export const locations = new Locations(api)
 export const privateLocations = new PrivateLocations(api)
+export const testSessions = new TestSessions(api)

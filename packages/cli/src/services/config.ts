@@ -68,7 +68,7 @@ const config = {
       development: 'wss://events-local.checklyhq.com',
       test: 'wss://events-test.checklyhq.com',
       staging: 'wss://events-test.checklyhq.com',
-      production: 'wss://events.checklyhq.com',
+      production: 'wss://events-local.checklyhq.com',
     }
     return environments[this.getEnv()]
   },
