@@ -1,5 +1,6 @@
 import { testSessions, assets } from '../rest/api'
 import { SocketClient } from './socket-client'
+import PQueue from 'p-queue'
 import * as uuid from 'uuid'
 import { EventEmitter } from 'node:events'
 import type { AsyncMqttClient } from 'async-mqtt'
@@ -45,6 +46,7 @@ export default class CheckRunner extends EventEmitter {
   timeout: number
   verbose: boolean
   shouldRecord: boolean
+  queue: PQueue
 
   constructor (
     accountId: string,
@@ -69,30 +71,42 @@ export default class CheckRunner extends EventEmitter {
     this.timeout = timeout
     this.verbose = verbose
     this.shouldRecord = shouldRecord
+    this.queue = new PQueue({ autoStart: false, concurrency: 1 })
   }
 
   async run () {
-    this.emit(Events.RUN_STARTED)
-    const socketClient = await SocketClient.connect()
-
-    const checkRunSuiteId = uuid.v4()
-    // Configure the socket listener and allChecksFinished listener before starting checks to avoid race conditions
-    await this.configureResultListener(checkRunSuiteId, socketClient)
-    const allChecksFinished = this.allChecksFinished()
-
+    let socketClient = null
     try {
-      await this.scheduleAllChecks(checkRunSuiteId)
+      socketClient = await SocketClient.connect()
+
+      const checkRunSuiteId = uuid.v4()
+      // Configure the socket listener and allChecksFinished listener before starting checks to avoid race conditions
+      await this.configureResultListener(checkRunSuiteId, socketClient)
+      const allChecksFinished = this.allChecksFinished()
+      this.setAllTimeouts()
+
+      const { testSessionId, testResultIds } = await this.scheduleAllChecks(checkRunSuiteId)
+
+      // Start the queue after the test session run rest call is completed to avoid race conditions
+      this.queue.start()
+      this.emit(Events.RUN_STARTED, testSessionId, testResultIds)
 
       await allChecksFinished
-      this.emit(Events.RUN_FINISHED)
+      this.emit(Events.RUN_FINISHED, testSessionId)
     } catch (err) {
+      this.disableAllTimeouts()
       this.emit(Events.ERROR, err)
     } finally {
-      await socketClient.end()
+      if (socketClient) {
+        await socketClient.end()
+      }
     }
   }
 
-  private async scheduleAllChecks (checkRunSuiteId: string): Promise<void> {
+  private async scheduleAllChecks (checkRunSuiteId: string): Promise<{
+    testSessionId?: string,
+    testResultIds?: { [key: string]: string },
+  }> {
     const checkRunJobs = Array.from(this.checks.entries()).map(([checkRunId, check]) => ({
       ...check.synthesize(),
       group: check.groupId ? this.groups[check.groupId.ref].synthesize() : undefined,
@@ -104,60 +118,79 @@ export default class CheckRunner extends EventEmitter {
       if (!checkRunJobs.length) {
         throw new Error('Unable to find checks to run.')
       }
-      await testSessions.run({
+      const { data } = await testSessions.run({
         name: this.project.name,
         checkRunJobs,
-        project: {
-          logicalId: this.project.logicalId,
-        },
+        project: { logicalId: this.project.logicalId },
         runLocation: this.location,
         repoInfo: this.project.repoInfo,
         shouldRecord: this.shouldRecord,
       })
-      Array.from(this.checks.entries()).forEach(([checkRunId, check]) =>
-        this.timeouts.set(checkRunId, setTimeout(() => {
-          this.timeouts.delete(checkRunId)
-          this.emit(Events.CHECK_FAILED, check, `Reached timeout of ${this.timeout} seconds waiting for check result.`)
-          this.emit(Events.CHECK_FINISHED, check)
-        }, this.timeout * 1000),
-        ))
+      return data
     } catch (err: any) {
       throw new Error(err.response?.data?.message ?? err.message)
     }
   }
 
   private async configureResultListener (checkRunSuiteId: string, socketClient: AsyncMqttClient): Promise<void> {
-    socketClient.on('message', async (topic: string, rawMessage: string|Buffer) => {
+    socketClient.on('message', (topic: string, rawMessage: string|Buffer) => {
       const message = JSON.parse(rawMessage.toString('utf8'))
       const topicComponents = topic.split('/')
       const checkRunId = topicComponents[4]
       const subtopic = topicComponents[5]
-      const check = this.checks.get(checkRunId)
-      if (!this.timeouts.has(checkRunId)) {
-        // The check has already timed out. We return early to avoid reporting a duplicate result.
-        return
-      }
-      if (subtopic === 'run-start') {
-        this.emit(Events.CHECK_INPROGRESS, check)
-      } else if (subtopic === 'run-end') {
-        this.disableTimeout(checkRunId)
-        const { result } = message
-        const { region, logPath, checkRunDataPath } = result.assets
-        if (logPath && (this.verbose || result.hasFailures)) {
-          result.logs = await assets.getLogs(region, logPath)
-        }
-        if (checkRunDataPath && (this.verbose || result.hasFailures)) {
-          result.checkRunData = await assets.getCheckRunData(region, checkRunDataPath)
-        }
-        this.emit(Events.CHECK_SUCCESSFUL, check, result)
-        this.emit(Events.CHECK_FINISHED, check)
-      } else if (subtopic === 'error') {
-        this.disableTimeout(checkRunId)
-        this.emit(Events.CHECK_FAILED, check, message)
-        this.emit(Events.CHECK_FINISHED, check)
-      }
+
+      this.queue.add(() => this.processMessage(checkRunId, subtopic, message))
     })
     await socketClient.subscribe(`account/${this.accountId}/ad-hoc-check-results/${checkRunSuiteId}/+/+`)
+  }
+
+  private async processMessage (checkRunId: string, subtopic: string, message: any) {
+    if (!this.timeouts.has(checkRunId)) {
+      // The check has already timed out. We return early to avoid reporting a duplicate result.
+      return
+    }
+    const check = this.checks.get(checkRunId)
+    if (subtopic === 'run-start') {
+      this.emit(Events.CHECK_INPROGRESS, check)
+    } else if (subtopic === 'run-end') {
+      this.disableTimeout(checkRunId)
+      const { result } = message
+      const {
+        region,
+        logPath,
+        checkRunDataPath,
+        playwrightTestTraceFiles,
+        playwrightTestVideoFiles,
+      } = result.assets
+      if (logPath && (this.verbose || result.hasFailures)) {
+        result.logs = await assets.getLogs(region, logPath)
+      }
+      if (checkRunDataPath && (this.verbose || result.hasFailures)) {
+        result.checkRunData = await assets.getCheckRunData(region, checkRunDataPath)
+      }
+
+      try {
+        if (result.hasFailures) {
+          if (playwrightTestTraceFiles && playwrightTestTraceFiles.length) {
+            result.traceFilesUrls = await Promise
+              .all(playwrightTestTraceFiles.map((t: string) => assets.getAssetsLink(region, t)))
+          }
+          if (playwrightTestVideoFiles && playwrightTestVideoFiles.length) {
+            result.videoFilesUrls = await Promise
+              .all(playwrightTestVideoFiles.map((t: string) => assets.getAssetsLink(region, t)))
+          }
+        }
+      } catch {
+        // TODO: remove the try/catch after deploy endpoint to fetch assets link
+      }
+
+      this.emit(Events.CHECK_SUCCESSFUL, check, result)
+      this.emit(Events.CHECK_FINISHED, check)
+    } else if (subtopic === 'error') {
+      this.disableTimeout(checkRunId)
+      this.emit(Events.CHECK_FAILED, check, message)
+      this.emit(Events.CHECK_FINISHED, check)
+    }
   }
 
   private allChecksFinished (): Promise<void> {
@@ -172,6 +205,20 @@ export default class CheckRunner extends EventEmitter {
         if (finishedCheckCount === numChecks) resolve()
       })
     })
+  }
+
+  private setAllTimeouts () {
+    Array.from(this.checks.entries()).forEach(([checkRunId, check]) =>
+      this.timeouts.set(checkRunId, setTimeout(() => {
+        this.timeouts.delete(checkRunId)
+        this.emit(Events.CHECK_FAILED, check, `Reached timeout of ${this.timeout} seconds waiting for check result.`)
+        this.emit(Events.CHECK_FINISHED, check)
+      }, this.timeout * 1000),
+      ))
+  }
+
+  private disableAllTimeouts () {
+    Array.from(this.checks.entries()).forEach(([checkRunId]) => this.disableTimeout(checkRunId))
   }
 
   private disableTimeout (checkRunId: string) {

@@ -1,22 +1,30 @@
-import chalk = require('chalk')
+import * as chalk from 'chalk'
 import * as indentString from 'indent-string'
 
 import { Reporter } from './reporter'
-import { formatCheckTitle, CheckStatus, printLn } from './util'
+import { formatCheckTitle, CheckStatus, printLn, getTestSessionUrl } from './util'
 import type { RunLocation } from '../services/check-runner'
 import { Check } from '../constructs/check'
+
+// Map from file -> check logicalId -> check+result.
+// This lets us print a structured list of the checks.
+// Map remembers the original insertion order, so each time we print the summary will be consistent.
+export type checkFilesMap = Map<string, Map<string, { check?: Check, result?: any, titleString: string }>>
 
 export default abstract class AbstractListReporter implements Reporter {
   _clearString = ''
   runLocation: RunLocation
-  // Map from file -> check logicalId -> check+result.
-  // This lets us print a structured list of the checks.
-  // Map remembers the original insertion order, so each time we print the summary will be consistent.
-  checkFilesMap: Map<string, Map<string, { check?: Check, result?: any, titleString: string }>>
+  checkFilesMap: checkFilesMap
   numChecks: number
   verbose: boolean
+  testSessionId?: string
+  testResultIds?: { [key: string]: string }
 
-  constructor (runLocation: RunLocation, checks: Array<Check>, verbose: boolean) {
+  constructor (
+    runLocation: RunLocation,
+    checks: Array<Check>,
+    verbose: boolean,
+  ) {
     this.numChecks = checks.length
     this.runLocation = runLocation
     this.verbose = verbose
@@ -36,7 +44,7 @@ export default abstract class AbstractListReporter implements Reporter {
 
   abstract onBeginStatic(): void
 
-  abstract onBegin(): void
+  abstract onBegin(testSessionId: string, testResultIds?: { [key: string]: string }): void
 
   abstract onEnd(): void
 
@@ -51,6 +59,14 @@ export default abstract class AbstractListReporter implements Reporter {
 
   onError (err: Error) {
     printLn(chalk.red('Unable to run checks: ') + err.message)
+  }
+
+  _setTestSessionId (testSessionId?: string) {
+    this.testSessionId = testSessionId
+  }
+
+  _setTestResultIds (testResultIds?: { [key: string]: string }) {
+    this.testResultIds = testResultIds
   }
 
   // Clear the summary which was printed by _printStatus from stdout
@@ -118,6 +134,12 @@ export default abstract class AbstractListReporter implements Reporter {
     printLn(statusString)
     // Ansi escape code for erasing the line and moving the cursor up
     this._clearString = '\r\x1B[K\r\x1B[1A'.repeat(statusString.split('\n').length + 1)
+  }
+
+  _printTestSessionsUrl () {
+    if (this.testSessionId) {
+      printLn(`${chalk.white('Detailed session summary at:')} ${chalk.underline.cyan(getTestSessionUrl(this.testSessionId))}`, 2)
+    }
   }
 
   _runLocationString (): string {

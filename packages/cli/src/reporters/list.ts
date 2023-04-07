@@ -1,7 +1,8 @@
 import * as indentString from 'indent-string'
+import * as chalk from 'chalk'
 
 import AbstractListReporter from './abstract-list'
-import { formatCheckTitle, formatCheckResult, CheckStatus, printLn } from './util'
+import { formatCheckTitle, formatCheckResult, CheckStatus, printLn, getTestSessionUrl, getTraceUrl } from './util'
 
 export default class ListReporter extends AbstractListReporter {
   onBeginStatic () {
@@ -9,7 +10,9 @@ export default class ListReporter extends AbstractListReporter {
     this._printSummary({ skipCheckCount: true })
   }
 
-  onBegin () {
+  onBegin (testSessionId?: string, testResultIds?: { [key: string]: string }) {
+    this._setTestSessionId(testSessionId)
+    this._setTestResultIds(testResultIds)
     printLn(`Running ${this.numChecks} checks in ${this._runLocationString()}.`, 2, 1)
     this._printSummary()
   }
@@ -17,6 +20,7 @@ export default class ListReporter extends AbstractListReporter {
   onEnd () {
     this._clearSummary()
     this._printSummary()
+    this._printTestSessionsUrl()
   }
 
   onCheckEnd (checkResult: any) {
@@ -32,6 +36,32 @@ export default class ListReporter extends AbstractListReporter {
         printLn(indentString(formatCheckResult(checkResult), 4), 2, 1)
       }
     }
+
+    if (checkResult.hasFailures) {
+      if (checkResult.traceFilesUrls) {
+        // TODO: print all video files URLs
+        printLn(indentString(
+          'View trace : ' + chalk.underline.cyan(
+            getTraceUrl(checkResult.traceFilesUrls[0]))
+          , 4,
+        ))
+      }
+      if (checkResult.videoFilesUrls) {
+        // TODO: print all trace files URLs
+        printLn(indentString(
+          'View video : ' + chalk.underline.cyan(
+            `${checkResult.videoFilesUrls[0]}`)
+          , 4,
+        ))
+      }
+      if (this.testResultIds && this.testSessionId) {
+        printLn(indentString(
+          'View result: ' + chalk.underline.cyan(`${getTestSessionUrl(this.testSessionId)}/results/${this.testResultIds[checkResult.logicalId]}`)
+          , 4,
+        ), 2)
+      }
+    }
+
     this._printSummary()
   }
 
